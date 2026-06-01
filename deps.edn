@@ -1,0 +1,67 @@
+{:paths ["src/main"]
+
+ ;; The official Fulcro RAD rendering plugin for the fulcro-tui terminal engine. Depends on the
+ ;; published fulcro-tui engine plus fulcro-rad-statecharts (this plugin targets the statechart variant
+ ;; of RAD). Versions match the babashka-compat set the demo proves: fulcro 3.10.0-RC2, statecharts
+ ;; 1.4.0-RC18, fulcro-rad 1.6.24, fulcro-rad-statecharts 0.1.5 (which transitively pins an older
+ ;; statecharts, so we exclude it and declare statecharts explicitly).
+ :deps  {com.fulcrologic/fulcro-tui             {:mvn/version "1.0.1-SNAPSHOT"}
+         com.fulcrologic/fulcro                 {:mvn/version "3.10.0-RC2"}
+         com.fulcrologic/fulcro-rad             {:mvn/version "1.6.24"}
+         com.fulcrologic/fulcro-rad-statecharts {:mvn/version "0.1.5"
+                                                 :exclusions  [com.fulcrologic/statecharts]}
+         com.fulcrologic/statecharts            {:mvn/version "1.4.0-RC18"}}
+
+ :aliases
+ {:test        {:extra-paths ["src/test"]
+                :extra-deps  {fulcrologic/fulcro-spec {:mvn/version "3.2.10"
+                                                       :exclusions  [com.fulcrologic/fulcro]}
+                              org.clojure/test.check  {:mvn/version "1.1.1"}}}
+
+  ;; Plugin render specs (DB-free: a tiny in-memory RAD model + a mock loopback remote + string
+  ;; terminal). Run WITHOUT throwing guardrails: the engine's `put-cell` is guardrails-instrumented
+  ;; with a full `::buffer` spec, so a real-sized render under throwing guardrails is ~O(cells^2). The
+  ;; plugin renderers themselves carry no `>defn` schemas, so there is nothing to seal here.
+  ;;   clojure -M:test:test-runner
+  :test-runner {:extra-deps {io.github.cognitect-labs/test-runner
+                             {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+                :main-opts  ["-m" "cognitect.test-runner" "-d" "src/test" "-r" ".*-spec$"]}
+
+  ;; ─── Full-stack RAD/statechart demo (see src/demo) ───────────────────────────────────────────────
+  ;; JVM-only server: Datomic Local (in-memory) + Pathom v2 behind a transit /api. fulcro-rad-datomic
+  ;; transitively pins an older fulcro-rad, so we exclude it and let the top-level 1.6.24 win.
+  :demo-server {:extra-paths ["src/demo"]
+                :extra-deps  {com.fulcrologic/fulcro-rad-datomic {:mvn/version "1.5.6"
+                                                                  :exclusions [com.fulcrologic/fulcro-rad]}
+                              com.datomic/local                  {:mvn/version "1.0.291"}
+                              com.datomic/client-cloud           {:mvn/version "1.0.131"}
+                              com.wsscode/pathom                 {:mvn/version "2.4.0"}
+                              http-kit/http-kit                  {:mvn/version "2.8.1"}
+                              ring/ring-core                     {:mvn/version "1.15.3"}}
+                :main-opts   ["-m" "tui-demo.server.main"]}
+
+  ;; JVM TUI client (also runnable under babashka via `bb run demo`).
+  :demo        {:extra-paths ["src/demo"]
+                :extra-deps  {org.babashka/http-client {:mvn/version "0.4.22"}}
+                :main-opts   ["-m" "tui-demo.client.main"]}
+
+  ;; Demo SERVER integration tests (Datomic round-trips) — guardrails throwing (good for server logic).
+  ;;   clojure -M:demo-server:test:demo-test
+  :demo-test   {:extra-paths ["src/demo-test"]
+                :extra-deps  {io.github.cognitect-labs/test-runner
+                              {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+                :jvm-opts    ["-Dguardrails.enabled=true" "-Dguardrails.config=guardrails-test.edn"]
+                :main-opts   ["-m" "cognitect.test-runner" "-d" "src/demo-test" "-r" ".*-spec$"]}
+
+  ;; Full-stack TUI RENDER test (Datomic + Pathom + the plugin, driven to a string-terminal). Runs
+  ;; WITHOUT throwing guardrails (same put-cell O(cells^2) reason as :test-runner). src/demo-test is on
+  ;; the path only because the render spec uses `datomic-spec/fresh-test-conn!`; only src/demo-render-test
+  ;; specs are run.
+  ;;   clojure -M:demo-server:test:demo-render
+  :demo-render {:extra-paths ["src/demo-render-test" "src/demo-test"]
+                :extra-deps  {io.github.cognitect-labs/test-runner
+                              {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+                :main-opts   ["-m" "cognitect.test-runner" "-d" "src/demo-render-test" "-r" ".*-spec$"]}
+
+  :nrepl       {:extra-deps {nrepl/nrepl {:mvn/version "1.5.1"}}
+                :main-opts  ["-m" "nrepl.cmdline" "--port" "0"]}}}

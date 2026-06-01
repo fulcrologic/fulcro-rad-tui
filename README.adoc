@@ -1,0 +1,61 @@
+= fulcro-rad-tui
+
+The official https://github.com/fulcrologic/fulcro-rad[Fulcro RAD] rendering plugin for the
+**fulcro-tui** terminal UI engine. It renders RAD reports, forms, and controls as
+`com.fulcrologic.fulcro.tui` element trees instead of DOM — the terminal analog of
+`fulcro-rad-semantic-ui`.
+
+This plugin targets the **statechart** variant of RAD (`fulcro-rad-statecharts`): fields dispatch
+through `fr/render-field`, form structure through `com.fulcrologic.rad.statechart.form/render-element`,
+reports through the base-RAD report-render bridge, and generic controls through the controls map.
+
+== Install
+
+[source,clojure]
+----
+;; deps.edn
+com.fulcrologic/fulcro-rad-tui {:mvn/version "..."}
+----
+
+[source,clojure]
+----
+(require '[com.fulcrologic.rad.application :as rad-app]
+         '[com.fulcrologic.rad.rendering.tui.tui-controls :as tui])
+(rad-app/install-ui-controls! app tui/all-controls)   ; before mounting
+----
+
+Requiring `com.fulcrologic.rad.rendering.tui.tui-controls` also installs the field/form/report
+defmethods (the statechart contract). Rendering options (label/column widths, colors) are documented in
+`com.fulcrologic.rad.tui-options`.
+
+== Feature coverage (vs fulcro-rad-semantic-ui)
+
+* **Fields:** string/text/multi-line, password + viewable-password (masked), sorted-set, picker styles,
+  autocomplete; int/long/double; decimal + USD currency; boolean; keyword/enum (+autocomplete); instant
+  (+date-at-noon/picker); ref pick-one/pick-many/autocomplete.
+* **Controls:** button, string (+search), boolean/toggle, picker, instant (default/starting-date/
+  ending-date/date-at-noon).
+* **Reports:** `:default` table and `:list`; form structure + `fr/render-header/footer/fields`; container
+  layout (see the wiring note in `container.cljc`).
+
+Intentionally omitted (not terminal-relevant): blob file/image upload, async-abandon modal, `:file`
+container styles.
+
+== Tests
+
+* `clojure -M:test:test-runner` — DB-free plugin render specs (mock remote + string terminal).
+* `clojure -M:demo-server:test:demo-test` — demo SERVER integration tests (Datomic Local).
+* `clojure -M:demo-server:test:demo-render` — full-stack render of the demo (Datomic + Pathom + plugin).
+
+The render specs run **without** throwing guardrails on purpose: the engine's `put-cell` is
+guardrails-instrumented with a full `::buffer` spec, so a real-sized render under throwing guardrails is
+~O(cells²).
+
+== Demo
+
+Two terminals:
+
+----
+bb server      # JVM Datomic Local + Pathom on :3001
+bb demo        # babashka TUI client
+----

@@ -1,0 +1,27 @@
+;; ===========================================================================
+;; Babashka target for fulcro-rad-tui.
+;;
+;; The fulcro-tui engine and this RAD plugin both load and run under babashka. bb.edn is intentionally
+;; separate from deps.edn: clojurescript / spec.alpha are excluded on the client path because they clash
+;; with babashka's SCI internals (the client is pure clj/bb). The demo SERVER (Datomic Local + Pathom)
+;; is JVM-only, so the `server` task shells out to the JVM Clojure CLI rather than running in-process.
+;;
+;; Two-terminal demo:  bb server   (JVM, port 3001)   then   bb demo   (bb client).
+;; ===========================================================================
+{:paths ["src/main"]
+ :deps  {com.fulcrologic/fulcro-tui {:mvn/version "1.0.1-SNAPSHOT"}
+         com.fulcrologic/fulcro     {:mvn/version "3.10.0-RC2"}}
+ :tasks {server {:doc  "Start + seed the JVM demo server on :3001 (shells `clojure -M:demo-server`)."
+                 :task (clojure "-M:demo-server")}
+
+         demo {:doc         "Run the full-stack RAD/statechart demo client (needs `bb server` on :3001)."
+               :extra-paths ["src/demo"]
+               :extra-deps  {com.fulcrologic/statecharts            {:mvn/version "1.4.0-RC18"}
+                             com.fulcrologic/fulcro-rad             {:mvn/version "1.6.24"}
+                             com.fulcrologic/fulcro-rad-statecharts {:mvn/version "0.1.5"
+                                                                     :exclusions [org.clojure/clojurescript
+                                                                                  org.clojure/spec.alpha
+                                                                                  com.fulcrologic/statecharts]}
+                             org.babashka/http-client               {:mvn/version "0.4.22"}}
+               :requires    ([tui-demo.client.main])
+               :task        (tui-demo.client.main/-main)}}}
