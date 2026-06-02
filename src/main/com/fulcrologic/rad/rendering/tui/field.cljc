@@ -12,10 +12,12 @@
    Requiring this ns installs every `fr/render-field` defmethod (the fulcro-rad-statecharts field
    rendering contract is multimethod-based, dispatched on `[attribute-type field-style]`)."
   (:require
+    [cljc.java-time.local-time :as lt]
     [clojure.string :as str]
     [com.fulcrologic.fulcro.components :as comp]
     [com.fulcrologic.fulcro.mutations :as m]
     [com.fulcrologic.fulcro.raw.application :as rapp]
+    [com.fulcrologic.fulcro.react.hooks :as hooks]
     [com.fulcrologic.fulcro.tui.elements :as e :refer [vbox hbox text input button]]
     [com.fulcrologic.rad.attributes :as-alias attr]
     [com.fulcrologic.rad.attributes-options :as ao]
@@ -86,6 +88,61 @@
     (try (math/numeric (str/trim s)) (catch #?(:clj Exception :cljs :default) _ nil))))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;; Buffered (commit-on-blur) inputs
+;;
+;; A terminal `input` is controlled: its edited text must round-trip on every keystroke. For fields
+;; whose MODEL value is not a string (e.g. :instant), parsing on each keystroke is wrong — a partly
+;; typed value has no valid parse, and an eagerly-parsed value snaps the display out from under the
+;; caret mid-entry (typing `2020-10-1` toward `2020-10-12` would jump to `2020-10-01`). So we hold the
+;; in-progress text in transient COMPONENT-LOCAL state (`hooks/use-state`) and commit the PARSED value
+;; only when the field loses focus / is submitted; the model then only ever holds a real value (or nil),
+;; never a raw editing string — which is what made saves fail.
+;;
+;; `use-state` works here because fulcro-tui establishes Fulcro's headless hook render-path context
+;; during its render walk (so hooks persist across renders despite each render rebuilding the component,
+;; and are isolated per render-path — hence per to-many subform row). A transient input buffer is
+;; exactly the kind of "transient user string" hooks are appropriate for; no app-db state is involved.
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(defn buffered-field-renderer
+  "Returns a field render fn (`(fn [env attribute])`) drawing a labelled `input` whose in-progress text
+   is held in component-local `hooks/use-state` and committed to the model only on blur/submit, so the
+   model only ever holds a parsed value — never a raw editing string. Hook state is per render-path, so
+   to-many subform rows each edit independently.
+
+     * `value->display` - `(fn [model-value])` => the input string shown when no edit is in progress.
+     * `string->model`  - `(fn [edited-string])` => the model value to store on commit; return the
+                          sentinel `::invalid` to reject the commit and keep the user's text for
+                          correction (the model is left unchanged).
+     * `input-attrs`    - (optional) extra attrs merged onto the `input` node (e.g. `{:height 4}`)."
+  ([value->display string->model] (buffered-field-renderer value->display string->model {}))
+  ([value->display string->model input-attrs]
+   (fn [{::rform/keys [form-instance] :as env} {::attr/keys [qualified-key] :as attribute}]
+     (let [{:keys [value visible? read-only?] :as ctx} (form/field-context env attribute)
+           ;; nil buffer = not currently editing (show the model value); a string = in-progress edit.
+           [buf set-buf!] (hooks/use-state nil)
+           display        (if (some? buf) buf (value->display value))
+           commit!        (fn []
+                            (when (and (not read-only?) (some? buf))
+                              (let [model (string->model buf)]
+                                (when-not (= ::invalid model)
+                                  (m/set-value!! form-instance qualified-key model)
+                                  (form/input-changed! env qualified-key model)
+                                  (set-buf! nil)))))]
+       (when visible?
+         (with-validation form-instance ctx
+           (hbox {:height (or (:height input-attrs) 1)}
+             (label-cell form-instance ctx qualified-key attribute)
+             (input (merge {:id            (field-node-id form-instance qualified-key "field")
+                            :grow          1
+                            :color         (tuo/option form-instance tuo/value-color)
+                            :value         display
+                            :on-change     (fn [v & _] (when-not read-only? (set-buf! (or v ""))))
+                            :on-lost-focus (fn [_] (commit!))
+                            :on-submit     (fn [_] (commit!))}
+                       input-attrs)))))))))
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Scalar field renderers (string / text / int / long / double / decimal / multi-line)
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -126,71 +183,73 @@
   "Renders a :string :multi-line attribute as a labelled multi-row text area (Enter inserts a newline)."
   (field-renderer identity {:multiline? true :height 4}))
 
+;; Numeric fields store a NON-string model (Long / double / RAD decimal), so they are buffered like the
+;; date field: the typed text is held in `use-state` and parsed only on blur/submit (so the model never
+;; holds a half-typed string — derived fields recompute on commit). `string->model` returns the parsed
+;; number, nil for a blank field, or `::invalid` to keep an unparseable in-progress edit for correction.
+(defn- commit-number
+  "Returns a `string->model` for `buffered-field-renderer`: blank -> nil, else `(parse t)` or `::invalid`."
+  [parse]
+  (fn [s] (let [t (str/trim (or s ""))] (if (str/blank? t) nil (or (parse t) ::invalid)))))
+
+(defn- num-display [v] (if (some? v) (str v) ""))
+
 (def render-int-field
-  "Renders an :int/:long attribute as a labelled text input, coercing the edited text to a Long when
-   valid (a not-yet-numeric in-progress edit is kept as the raw string so typing still shows)."
-  (field-renderer (fn [s] (or (parse-long-safe s) s))))
+  "Renders an :int/:long attribute as a buffered text input, committing a Long on blur."
+  (buffered-field-renderer num-display (commit-number parse-long-safe)))
 
 (def render-double-field
-  "Renders a :double attribute as a labelled text input, coercing to a double when valid; an
-   in-progress edit is kept as the raw string."
-  (field-renderer (fn [s] (or (parse-double-safe s) s))))
+  "Renders a :double attribute as a buffered text input, committing a double on blur."
+  (buffered-field-renderer num-display (commit-number parse-double-safe)))
 
 (def render-decimal-field
-  "Renders a :decimal attribute as a labelled text input, coercing to a RAD decimal when valid so
-   derived fields (subtotal/total) recompute; an in-progress edit is kept as the raw string."
-  (field-renderer (fn [s] (or (parse-decimal-safe s) s))))
+  "Renders a :decimal attribute as a buffered text input, committing a RAD decimal on blur."
+  (buffered-field-renderer
+    (fn [v] (if (some? v) (math/numeric->str v) ""))
+    (commit-number parse-decimal-safe)))
 
-(defn render-currency-field
-  "Renders a :decimal :USD attribute as a `$`-prefixed labelled input. The stored value is a RAD
-   decimal; the input shows `$<amount>` and strips `$`/`,` before parsing back to a decimal (an
-   in-progress edit is kept as the raw string)."
-  [{::rform/keys [form-instance] :as env} {::attr/keys [qualified-key] :as attribute}]
-  (let [{:keys [value visible? read-only?] :as ctx} (form/field-context env attribute)
-        display (cond
-                  (string? value) value
-                  (some? value)   (str "$" (math/numeric->str value))
-                  :else           "")]
-    (when visible?
-      (with-validation form-instance ctx
-        (hbox {:height 1}
-          (label-cell form-instance ctx qualified-key attribute)
-          (input {:id        (field-node-id form-instance qualified-key "field")
-                  :grow      1
-                  :color     (tuo/option form-instance tuo/value-color)
-                  :value     display
-                  :on-change (fn [v & _]
-                               (when-not read-only?
-                                 (let [clean (str/replace (str v) #"[$,]" "")
-                                       model (or (parse-decimal-safe clean) v)]
-                                   (m/set-value!! form-instance qualified-key model)
-                                   (form/input-changed! env qualified-key model))))}))))))
+(def render-currency-field
+  "Renders a :decimal :USD attribute as a `$`-prefixed buffered input: shows `$<amount>`, strips `$`/`,`
+   before parsing, and commits a RAD decimal on blur."
+  (buffered-field-renderer
+    (fn [v] (if (some? v) (str "$" (math/numeric->str v)) ""))
+    (commit-number (fn [s] (parse-decimal-safe (str/replace (or s "") #"[$,]" ""))))))
 
-(defn render-instant-field
-  "Renders an :instant attribute as a labelled `YYYY-MM-DD` date input. The stored value is an inst;
-   the input shows/edits the html date string and parses it back to an inst when complete (an
-   in-progress edit is kept as the raw string so typing still shows)."
-  [{::rform/keys [form-instance] :as env} {::attr/keys [qualified-key] :as attribute}]
-  (let [{:keys [value visible? read-only?] :as ctx} (form/field-context env attribute)
-        display (cond
-                  (string? value) value
-                  (inst? value) (dt/inst->html-date value)
-                  :else "")]
-    (when visible?
-      (with-validation form-instance ctx
-        (hbox {:height 1}
-          (label-cell form-instance ctx qualified-key attribute)
-          (input {:id        (field-node-id form-instance qualified-key "field")
-                  :grow      1
-                  :color     (tuo/option form-instance tuo/value-color)
-                  :value     display
-                  :on-change (fn [v & _]
-                               (when-not read-only?
-                                 (let [model (if (re-matches #"\d{4}-\d{2}-\d{2}" (str/trim (or v "")))
-                                               (dt/html-date->inst (str/trim v))
-                                               v)]
-                                   (m/set-value!! form-instance qualified-key model)
-                                   (form/input-changed! env qualified-key model))))}))))))
+(defn- pad2
+  "Left-pads the string of `n` to width 2 with a leading zero (e.g. `\"1\"` -> `\"01\"`)."
+  [n]
+  (let [s (str n)] (if (= 1 (count s)) (str "0" s) s)))
+
+(defn- date-string->inst
+  "Parses a typed date string `s` into an inst at `local-time` on that day, tolerating non-zero-padded
+   month/day (e.g. `2020-10-1`). Returns nil for a blank string and the `::invalid` sentinel for a
+   non-blank string that is not yet a complete `YYYY-M-D` date (so an in-progress edit is not
+   committed). Used as the `string->model` for `buffered-field-renderer`."
+  [s local-time]
+  (let [t (str/trim (or s ""))]
+    (cond
+      (str/blank? t)                          nil
+      (re-matches #"\d{4}-\d{1,2}-\d{1,2}" t) (let [[y m d] (str/split t #"-")]
+                                                (dt/html-date->inst (str y "-" (pad2 m) "-" (pad2 d)) local-time))
+      :else                                   ::invalid)))
+
+(defn- instant-field-renderer
+  "Returns an :instant field renderer (`(fn [env attribute])`): a buffered (commit-on-blur) `YYYY-MM-DD`
+   date input that stores an inst at `local-time` on the chosen day (`lt/midnight` for the default /
+   start-of-day styles, `lt/noon` for `:date-at-noon`). The typed text is held transiently while
+   editing and parsed to an inst only on blur/submit, so the model never holds a partial string."
+  [local-time]
+  (buffered-field-renderer
+    (fn [value] (if (inst? value) (dt/inst->html-date value) ""))
+    (fn [s] (date-string->inst s local-time))))
+
+(def render-instant-field
+  "Renders an :instant attribute as a labelled `YYYY-MM-DD` date input storing midnight on the chosen day."
+  (instant-field-renderer lt/midnight))
+
+(def render-date-at-noon-field
+  "Renders an :instant :date-at-noon attribute as a date input storing noon on the chosen day."
+  (instant-field-renderer lt/noon))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;; Password fields (masked)
@@ -504,7 +563,7 @@
 (defmethod fr/render-field [:enum :default]             [env a] (render-enum-field env a))
 (defmethod fr/render-field [:enum :autocomplete]        [env a] (render-autocomplete-field env a))
 (defmethod fr/render-field [:instant :default]          [env a] (render-instant-field env a))
-(defmethod fr/render-field [:instant :date-at-noon]     [env a] (render-instant-field env a))
+(defmethod fr/render-field [:instant :date-at-noon]     [env a] (render-date-at-noon-field env a))
 (defmethod fr/render-field [:instant :picker]           [env a] (render-enum-field env a))
 (defmethod fr/render-field [:ref :pick-one]             [env a] (render-ref-pick-one env a))
 (defmethod fr/render-field [:ref :pick-many]            [env a] (render-ref-pick-many env a))

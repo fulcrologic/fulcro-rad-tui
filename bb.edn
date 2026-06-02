@@ -9,7 +9,7 @@
 ;; Two-terminal demo:  bb server   (JVM, port 3001)   then   bb demo   (bb client).
 ;; ===========================================================================
 {:paths ["src/main"]
- :deps  {com.fulcrologic/fulcro-tui {:mvn/version "1.0.0"}
+ :deps  {com.fulcrologic/fulcro-tui {:mvn/version "1.0.2"}
          com.fulcrologic/fulcro     {:mvn/version "3.10.0-RC2"}}
  :tasks {server {:doc  "Start + seed the JVM demo server on :3001 (shells `clojure -M:demo-server`)."
                  :task (clojure "-M:demo-server")}

@@ -4,7 +4,10 @@
    painted screen, on value-display logic (poke a value into state, re-render), and on a couple of
    keyboard-driven interactions (boolean toggle, enum picker open + select)."
   (:require
+    [cljc.java-time.local-time :as lt]
+    [com.fulcrologic.rad.rendering.tui.field :as field]
     [com.fulcrologic.rad.rendering.tui.test-support :as ts]
+    [com.fulcrologic.rad.type-support.date-time :as dt]
     [com.fulcrologic.rad.type-support.decimal :as math]
     [fulcro-spec.core :refer [=> assertions specification]]))
 
@@ -70,6 +73,53 @@
       (assertions
         "activating the boolean toggle flips [x] Yes to [ ] No"
         (boolean (re-find #"\[ \] No" (ts/screen-text app))) => true))))
+
+(specification "date-string->inst parsing"
+  (dt/with-timezone "America/Los_Angeles"
+    (let [p @#'field/date-string->inst]
+      (assertions
+        "returns nil for a blank string"
+        (p "" lt/midnight) => nil
+        "rejects an in-progress (incomplete) date with the ::invalid sentinel so it is not committed"
+        (p "2020-10-" lt/midnight) => ::field/invalid
+        "parses a complete zero-padded date to an inst"
+        (inst? (p "2020-10-02" lt/midnight)) => true
+        "tolerates a non-zero-padded month/day (e.g. 2020-10-1)"
+        (inst? (p "2020-10-1" lt/midnight)) => true
+        "stores a different time-of-day for midnight vs noon styles"
+        (= (p "2020-10-02" lt/midnight) (p "2020-10-02" lt/noon)) => false))))
+
+(specification "instant field — buffered commit on blur"
+  (ts/quiet
+    (let [app     (ts/form-app!)
+          created (ts/field-id app :thing/created)]
+      (ts/tab-to-id! app created)
+      (ts/type-str! app "2020-10-1")
+      (assertions
+        "shows the in-progress text exactly as typed (single-digit day allowed)"
+        (boolean (re-find #"2020-10-1" (ts/screen-text app))) => true
+        "leaves the model value unset while the field is still being edited (no raw string in model)"
+        (ts/field-value app :thing/created) => nil)
+      (ts/tab! app)                                         ; blur -> commit
+      (assertions
+        "commits a real inst (never a raw string) to the model on blur"
+        (inst? (ts/field-value app :thing/created)) => true))))
+
+(specification "numeric field — buffered commit on blur"
+  (ts/quiet
+    (let [app (ts/form-app!)
+          qty (ts/field-id app :thing/qty)]
+      (ts/tab-to-id! app qty)
+      (ts/type-str! app "42")
+      (assertions
+        "shows the typed digits while editing"
+        (boolean (re-find #"\b42\b" (ts/screen-text app))) => true
+        "leaves the model value unset while still editing (no raw string in model)"
+        (ts/field-value app :thing/qty) => nil)
+      (ts/tab! app)                                         ; blur -> commit
+      (assertions
+        "commits a parsed Long (not a string) on blur"
+        (ts/field-value app :thing/qty) => 42))))
 
 (specification "field interaction — enum picker open + select"
   (ts/quiet

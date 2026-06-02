@@ -27,6 +27,7 @@
     [com.fulcrologic.rad.report-options :as ro]
     [com.fulcrologic.rad.statechart.form :as form :refer [defsc-form]]
     [com.fulcrologic.rad.statechart.report :as report :refer [defsc-report]]
+    [com.fulcrologic.rad.type-support.date-time :as dt]
     [com.fulcrologic.statecharts.chart :refer [statechart]]
     [com.fulcrologic.statecharts.integration.fulcro :as scf]
     [com.fulcrologic.statecharts.integration.fulcro.routing :as scr]
@@ -232,6 +233,9 @@
         app (tui-app/application
               {:root-class Root
                :remotes    {:remote (mock-remote (merge {:thing/all things} by-ident))}})]
+    ;; RAD's instant formatters/parsers resolve against a bound timezone; a real TUI client sets one at
+    ;; startup (see tui-demo.client.main). Mirror that here so date fields format and commit.
+    (dt/set-timezone! "America/Los_Angeles")
     (rad-app/install-ui-controls! app tui-plugin/all-controls)
     (scf/install-fulcro-statecharts! app {:event-loop? true})
     (scr/start! app routing-chart)
@@ -261,6 +265,13 @@
 
 (defn tab! [app] (tui-app/step! app {:key :tab}))
 (defn enter! [app] (tui-app/step! app {:key :enter}))
+
+(defn type-str!
+  "Types `s` one printable character at a time into `app`'s focused input (a key event per char,
+   rendering after each). Returns the final screen text."
+  [app s]
+  (doseq [c s] (tui-app/step! app {:key (str c) :char (str c)}))
+  (screen-text app))
 
 (defn focus-ns
   "The namespace (string) of the currently-focused node id, or nil."
@@ -305,6 +316,17 @@
   [app k value]
   (swap! (:com.fulcrologic.fulcro.application/state-atom app)
     assoc-in [:thing/id (form-tempid app) k] value))
+
+(defn field-value
+  "Returns the current value of attribute `k` on the in-progress create ThingForm entity."
+  [app k]
+  (get-in (rapp/current-state app) [:thing/id (form-tempid app) k]))
+
+(defn field-id
+  "Returns the focus/caret node id used by the field renderers for attribute `qualified-key` on the
+   in-progress create ThingForm (mirrors `field/field-node-id` with the `field` prefix)."
+  [app qualified-key]
+  (keyword "field" (str (form-tempid app) "_" (clojure.core/namespace qualified-key) "_" (clojure.core/name qualified-key))))
 
 (defn report-app!
   "Builds a fresh app, routes to the report named `report-kw`, and waits for its seeded rows. `report-kw`

@@ -147,22 +147,28 @@
                                (when action ((lambda/->arity-tolerant action) instance control-key))))})))))
 
 (defn- html-date [value] (if (inst? value) (dt/inst->html-date value) ""))
-(defn- date-str? [v] (re-matches #"\d{4}-\d{2}-\d{2}" (str/trim (or v ""))))
+(defn- pad2 [n] (let [s (str n)] (if (= 1 (count s)) (str "0" s) s)))
+(defn- normalized-date-str
+  "Returns `v` normalized to a zero-padded `YYYY-MM-DD` string when it is a complete date (tolerating a
+   non-padded month/day such as `2020-10-1`), else nil."
+  [v]
+  (when-let [[_ y m d] (re-matches #"(\d{4})-(\d{1,2})-(\d{1,2})" (str/trim (or v "")))]
+    (str y "-" (pad2 m) "-" (pad2 d))))
 
 (defn date-time-control
   "Renders an `:instant :default` control as a date input (midnight on the chosen day)."
   [render-env]
-  (date-control html-date (fn [v] (when (date-str? v) (dt/html-date->inst (str/trim v) lt/midnight))) render-env))
+  (date-control html-date (fn [v] (when-let [s (normalized-date-str v)] (dt/html-date->inst s lt/midnight))) render-env))
 
 (defn midnight-on-date-control
   "Renders an `:instant :starting-date` control: stores midnight on the chosen day (inclusive start)."
   [render-env]
-  (date-control html-date (fn [v] (when (date-str? v) (dt/html-date->inst (str/trim v) lt/midnight))) render-env))
+  (date-control html-date (fn [v] (when-let [s (normalized-date-str v)] (dt/html-date->inst s lt/midnight))) render-env))
 
 (defn date-at-noon-control
   "Renders an `:instant :date-at-noon` control: stores noon on the chosen day."
   [render-env]
-  (date-control html-date (fn [v] (when (date-str? v) (dt/html-date->inst (str/trim v) lt/noon))) render-env))
+  (date-control html-date (fn [v] (when-let [s (normalized-date-str v)] (dt/html-date->inst s lt/noon))) render-env))
 
 (defn midnight-next-date-control
   "Renders an `:instant :ending-date` control: shows the chosen day but stores midnight of the NEXT day,
@@ -175,8 +181,8 @@
                     ldt/to-local-date
                     dt/local-date->html-date-string)
                   ""))
-    (fn [v] (when (date-str? v)
-              (-> (dt/html-date-string->local-date (str/trim v))
+    (fn [v] (when-let [s (normalized-date-str v)]
+              (-> (dt/html-date-string->local-date s)
                 (ld/plus-days 1)
                 (ld/at-time lt/midnight)
                 dt/local-datetime->inst)))
