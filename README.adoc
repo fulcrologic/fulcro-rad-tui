@@ -1,5 +1,8 @@
 = fulcro-rad-tui
 
+image:https://img.shields.io/clojars/v/com.fulcrologic/fulcro-rad-tui.svg[link=https://clojars.org/com.fulcrologic/fulcro-rad-tui]
+image:https://github.com/fulcrologic/fulcro-rad-tui/actions/workflows/test.yml/badge.svg["CI", link="https://github.com/fulcrologic/fulcro-rad-tui/actions/workflows/test.yml"]
+
 The official https://github.com/fulcrologic/fulcro-rad[Fulcro RAD] rendering plugin for the
 **fulcro-tui** terminal UI engine. It renders RAD reports, forms, and controls as
 `com.fulcrologic.fulcro.tui` element trees instead of DOM — the terminal analog of
